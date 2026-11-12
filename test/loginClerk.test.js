@@ -66,6 +66,6 @@ describe('Login pelo Clerk Tests', () => {
         console.log('[3/4] Resposta do RodoApp. Status:', response.status)
         expect(response.headers['content-type']).to.match(/json/)
         expect(response.status).to.equal(200)
-        expect(response.body).to.have.property('planoPro') // confira o nome no Swagger
+        expect(response.body.planoPro).to.equal(true)
     })
 })
