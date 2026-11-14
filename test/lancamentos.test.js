@@ -1,33 +1,20 @@
 const request = require('supertest')
 const { expect } = require('chai')
 const { abrirSessao } = require('../helpers/autenticacao')
+const { criarApiLancamentos } = require('../helpers/lancamentos')
 
 const baseUrl = process.env.APP_BASE_URL
 
 describe('Lançamentos', () => {
     
     let sessao
-    let idsCriados = []
+    let api
+    const idsCriados = []
 
-    // Função auxiliar: todo POST de lançamento passa por aqui
-    const criarLancamento = async (corpo) =>
-        request(baseUrl)
-            .post('/api/transactions')
-            .set('Authorization', `Bearer ${await sessao.getToken()}`)
-            .set('Accept', 'application/json')
-            .send(corpo)
-
-    // Função auxiliar: exclui um lançamento pelo id
-    const excluirLancamento = async (id) =>
-        request(baseUrl)
-            .delete(`/api/transactions/${id}`)
-            .set('Authorization', `Bearer ${await sessao.getToken()}`)
-            .set('Accept', 'application/json')
-    
-            
     before(async () => {
         console.log('[Lançamentos] Abrindo sessão no Clerk...')
         sessao = await abrirSessao()
+        api = criarApiLancamentos(sessao) // só pode ser criada depois do login
     })
 
     after(async () => {
@@ -46,7 +33,7 @@ describe('Lançamentos', () => {
 
     describe('POST /api/transactions', () => {
         it('cria despesa de alimentação e retorna 201', async () => {
-            const response = await criarLancamento({
+            const response = await api.criar({
                 type: 'despesa',
                 category: 'Alimentação',
                 value: 22.50,
@@ -62,7 +49,7 @@ describe('Lançamentos', () => {
         })
     
         it('cria despesa de combustível e retorna 201', async () => {
-            const response = await criarLancamento({
+            const response = await api.criar({
                 type: 'despesa',
                 category: 'Combustível',
                 value: 336.85,
@@ -86,7 +73,7 @@ describe('Lançamentos', () => {
         })
 
         it('cria receita de Uber e retorna 201', async () => {
-            const response = await criarLancamento({
+            const response = await api.criar({
                 type: 'receita',
                 category: 'Uber',
                 value: 17.75,
@@ -102,10 +89,8 @@ describe('Lançamentos', () => {
     
     describe('GET /api/transactions', () => {
         it('lista os lançamentos e inclui os criados', async () => {
-            const response = await request(baseUrl)
-                .get('/api/transactions')
-                .set('Authorization', `Bearer ${await sessao.getToken()}`)
-                .set('Accept', 'application/json')
+            const response = await api.listar() // sem id, lista todos
+
             expect(response.status, 'listar lançamentos').to.equal(200)
             expect(response.body, 'formato da lista').to.be.an('array')
             const idsNaLista = response.body.map((lancamento) => lancamento.id)
@@ -116,12 +101,36 @@ describe('Lançamentos', () => {
     describe('GET /api/transactions/{id}', () => {
         it('consulta um lançamento criado pelo id', async () => {
             const id = idsCriados[0] // a despesa de alimentação, criada primeiro
-            const response = await request(baseUrl)
-                .get(`/api/transactions/${id}`)
-                .set('Authorization', `Bearer ${await sessao.getToken()}`)
-                .set('Accept', 'application/json')
+            const response = await api.consultar(id)
             expect(response.status, 'consultar lançamento por id').to.equal(200)
             expect(response.body.id, 'id do lançamento consultado').to.equal(id)
+        })
+    })
+
+        describe('PATCH /api/transactions/{id}', () => {
+        // Só os campos que vão mudar: o PATCH preserva o resto
+        const alteracao = {
+            description: 'Almoço no restaurante - API Teste (editado)',
+            value: 30.50
+        }
+
+        it('edita descrição e valor da despesa de alimentação e retorna 200', async () => {
+            const id = idsCriados[0] // a despesa de alimentação, criada primeiro
+            const response = await api.editar(id, alteracao)
+            expect(response.status, 'editar lançamento').to.equal(200)
+            expect(response.body.id, 'id do lançamento editado').to.equal(id)
+            expect(response.body.description, 'descrição alterada na resposta').to.equal(alteracao.description)
+            expect(response.body.value, 'valor alterado na resposta').to.equal(alteracao.value)
+            expect(response.body.type, 'tipo preservado').to.equal('despesa')
+            expect(response.body.category, 'categoria preservada').to.equal('Alimentação')
+        })
+
+        it('a edição fica gravada na consulta por id', async () => {
+            const id = idsCriados[0]
+            const response = await api.consultar(id)
+            expect(response.status, 'consultar lançamento editado').to.equal(200)
+            expect(response.body.description, 'descrição gravada').to.equal(alteracao.description)
+            expect(response.body.value, 'valor gravado').to.equal(alteracao.value)
         })
     })
 
@@ -129,7 +138,7 @@ describe('Lançamentos', () => {
         it('exclui os lançamentos criados', async () => {
             while (idsCriados.length > 0) {
                 const id = idsCriados[0]
-                const response = await excluirLancamento(id)
+                const response = await api.excluir(id)
                 expect(response.status, `excluir lançamento ${id}`).to.equal(200)
                 idsCriados.shift() // tira da lista só depois de confirmar a exclusão
             }
@@ -140,7 +149,7 @@ describe('Lançamentos', () => {
         const idProtegido = 'cmwe1hazq0009o39shgmpk9og' // abastecimento com um posterior, na base de testes
 
         it('recusa excluir abastecimento que não é o último e retorna 400', async () => {
-            const response = await excluirLancamento(idProtegido)
+            const response = await api.excluir(idProtegido)
             expect(response.status, 'status da exclusão bloqueada').to.equal(400)
             expect(response.body.error, 'error da exclusão bloqueada').to.equal('Exclusão bloqueada')
             expect(response.body.message, 'message da exclusão bloqueada').to.include('último lançamento de combustível')
