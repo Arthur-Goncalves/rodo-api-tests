@@ -4,6 +4,13 @@ const userId = process.env.TEST_USER_ID
 const baseUrl = process.env.APP_BASE_URL
 const loginClerkUrl = process.env.APP_LOGIN_CLERK_URL
 
+// Recusa rodar fora de DEV: a suíte cria e apaga dados
+function exigirAmbienteSeguro() {
+    if (!clerkKey?.startsWith('sk_test_')) throw new Error('CLERK_TEST_SECRET_KEY deve ser de DEV (sk_test_).')
+    if (!userId?.startsWith('user_')) throw new Error('TEST_USER_ID deve começar com user_.')
+    if (new URL(baseUrl).hostname !== 'localhost') throw new Error('APP_BASE_URL deve apontar para localhost.')
+}
+
 const chamarClerk = async (caminho, corpo = {}) =>
     request(loginClerkUrl)
         .post(caminho)
@@ -11,7 +18,9 @@ const chamarClerk = async (caminho, corpo = {}) =>
         .send(corpo)
 
 async function abrirSessao() {
-    const sessao = await chamarClerk('/v1/sessions', { user_id: userId, })
+    exigirAmbienteSeguro()   // Confere o ambiente antes de falar com o Clerk
+
+    const sessao = await chamarClerk('/v1/sessions', { user_id: userId })
     if (sessao.status < 200 || sessao.status > 299) {
         throw new Error(`Erro ao criar sessão no Clerk. Status: ${sessao.status}`)
     }
@@ -20,23 +29,23 @@ async function abrirSessao() {
     let expiraEm = 0
 
     // Gera um token novo só quando faltam menos de 10 segundos para expirar
-async function getToken() {
-    if (!jwt || Date.now() >= expiraEm - 10000) {
-        const token = await chamarClerk(`/v1/sessions/${sessionId}/tokens`)
-        if (token.status < 200 || token.status > 299) {
-            throw new Error(`Erro ao gerar token no Clerk. Status: ${token.status}`)
+    async function getToken() {
+        if (!jwt || Date.now() >= expiraEm - 10000) {
+            const token = await chamarClerk(`/v1/sessions/${sessionId}/tokens`)
+            if (token.status < 200 || token.status > 299) {
+                throw new Error(`Erro ao gerar token no Clerk. Status: ${token.status}`)
+            }
+            jwt = token.body.jwt
+            expiraEm = Date.now() + 60000 // 1 minuto
         }
-        jwt = token.body.jwt
-        expiraEm = Date.now() + 60000 // 1 minuto
+        return jwt
     }
-    return jwt
+
+    const fecharSessao = async () => chamarClerk(`/v1/sessions/${sessionId}/revoke`)
+
+    return { getToken, fecharSessao }
 }
 
-const fecharSessao = async () => chamarClerk(`/v1/sessions/${sessionId}/revoke`)
-
-return { getToken, fecharSessao }
-}
-
-module.exports = { 
-    abrirSessao 
+module.exports = {
+    abrirSessao
 }
